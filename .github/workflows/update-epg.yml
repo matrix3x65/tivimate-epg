@@ -97,6 +97,6 @@ jobs:
         run: |
           git config user.name "EPG Bot"
           git config user.email "actions@github.com"
-          git add guide.xml guide.xml.gz
+          git add guide.xml.gz
           git diff --cached --quiet || git commit -m "Update combined EPG"
           git push
