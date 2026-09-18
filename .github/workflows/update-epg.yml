@@ -1,0 +1,102 @@
+name: Update Combined EPG
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 10 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download and combine EPG sources
+        run: |
+          cat > /tmp/merge_epg.py <<'PY'
+          import urllib.request
+          import gzip
+          import xml.etree.ElementTree as ET
+          import io
+
+          sources = [
+              "https://iptv-epg.org/files/epg-ytrxuiwfyd.xml",
+              "https://epgshare01.online/epgshare01/epg_ripper_US2.xml.gz",
+              "https://epgshare01.online/epgshare01/epg_ripper_US_LOCALS1.xml.gz",
+              "https://epgshare01.online/epgshare01/epg_ripper_US_SPORTS1.xml.gz",
+              "https://iptv-org.github.io/epg/guides/us-pr/tvtv.us.epg.xml",
+              "https://iptv-org.github.io/epg/guides/us-pr/gatotv.com.epg.xml",
+          ]
+
+          root_out = ET.Element("tv")
+          channels_seen = set()
+          programmes_seen = set()
+
+          for url in sources:
+              try:
+                  print("Downloading:", url)
+                  req = urllib.request.Request(
+                      url,
+                      headers={"User-Agent": "Mozilla/5.0"}
+                  )
+                  with urllib.request.urlopen(req, timeout=60) as r:
+                      data = r.read()
+
+                  if url.endswith(".gz") or data[:2] == b"\x1f\x8b":
+                      data = gzip.decompress(data)
+
+                  root = ET.parse(io.BytesIO(data)).getroot()
+
+                  for channel in root.findall("channel"):
+                      cid = channel.get("id")
+                      if cid and cid not in channels_seen:
+                          root_out.append(channel)
+                          channels_seen.add(cid)
+
+                  for programme in root.findall("programme"):
+                      key = (
+                          programme.get("channel"),
+                          programme.get("start"),
+                          programme.get("stop"),
+                      )
+                      if key not in programmes_seen:
+                          root_out.append(programme)
+                          programmes_seen.add(key)
+
+              except Exception as e:
+                  print("SOURCE FAILED:", url, e)
+
+          tree = ET.ElementTree(root_out)
+          tree.write(
+              "guide.xml",
+              encoding="utf-8",
+              xml_declaration=True
+          )
+
+          with open("guide.xml", "rb") as f_in:
+              with gzip.open("guide.xml.gz", "wb", compresslevel=9) as f_out:
+                  f_out.write(f_in.read())
+
+          print("Channels:", len(channels_seen))
+          print("Programmes:", len(programmes_seen))
+          PY
+
+          python /tmp/merge_epg.py
+
+      - name: Save updated guide
+        run: |
+          git config user.name "EPG Bot"
+          git config user.email "actions@github.com"
+          git add guide.xml guide.xml.gz
+          git diff --cached --quiet || git commit -m "Update combined EPG"
+          git push
